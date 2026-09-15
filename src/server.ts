@@ -4,98 +4,23 @@ import { createProperty, databaseHealth, getOwnerProperty, listOwnerProperties, 
 
 const app = Fastify({ logger: true });
 const botToken = process.env.TELEGRAM_BOT_TOKEN ?? '';
+type AuthBody={initData?:string}; type PropertyBody=AuthBody&{property?:PropertyInput};
+async function authenticatedUser(initData:string|undefined):Promise<{telegram:TelegramUser;user:Awaited<ReturnType<typeof upsertTelegramUser>>}>{const telegram=validateTelegramInitData(initData??'',botToken);return{telegram,user:await upsertTelegramUser(telegram)}}
+function validProperty(i:PropertyInput|undefined):i is PropertyInput{return !!i&&typeof i.title==='string'&&i.title.trim().length>0&&i.title.trim().length<=120&&typeof i.city==='string'&&i.city.trim().length>0&&i.city.trim().length<=120&&typeof i.address==='string'&&i.address.trim().length>0&&i.address.trim().length<=300&&typeof i.price_per_night==='number'&&Number.isFinite(i.price_per_night)&&i.price_per_night>0&&Number.isInteger(i.max_guests)&&i.max_guests>=1&&i.max_guests<=50&&(i.amenities===undefined||(Array.isArray(i.amenities)&&i.amenities.every(v=>typeof v==='string')))}
+app.get('/health',async(_r,reply)=>{try{const database=await databaseHealth();return{status:'ok',service:'rent-app',version:'0.4.0',database:database?'ok':'not_configured'}}catch(e){app.log.error(e);return reply.code(503).send({status:'degraded',service:'rent-app',version:'0.4.0',database:'error'})}});
+app.post<{Body:AuthBody}>('/api/auth/telegram',async(r,reply)=>{try{return{ok:true,user:(await authenticatedUser(r.body?.initData)).user}}catch(e){r.log.warn(e);return reply.code(401).send({ok:false,error:'Telegram authorization failed'})}});
+app.post<{Body:AuthBody}>('/api/owner/properties/list',async(r,reply)=>{try{const{user}=await authenticatedUser(r.body?.initData);return{ok:true,properties:await listOwnerProperties(user.id)}}catch(e){r.log.warn(e);return reply.code(401).send({ok:false,error:'Authorization failed'})}});
+app.post<{Body:PropertyBody}>('/api/owner/properties',async(r,reply)=>{try{const{user}=await authenticatedUser(r.body?.initData);if(!validProperty(r.body?.property))return reply.code(400).send({ok:false,error:'Invalid property data'});return reply.code(201).send({ok:true,property:await createProperty(user.id,r.body.property)})}catch(e){r.log.error(e);return reply.code(401).send({ok:false,error:'Authorization failed'})}});
+app.post<{Params:{id:string};Body:AuthBody}>('/api/owner/properties/:id/get',async(r,reply)=>{try{const{user}=await authenticatedUser(r.body?.initData);const property=await getOwnerProperty(user.id,r.params.id);return property?{ok:true,property}:reply.code(404).send({ok:false,error:'Property not found'})}catch(e){r.log.warn(e);return reply.code(401).send({ok:false,error:'Authorization failed'})}});
+app.post<{Params:{id:string};Body:PropertyBody}>('/api/owner/properties/:id',async(r,reply)=>{try{const{user}=await authenticatedUser(r.body?.initData);if(!validProperty(r.body?.property))return reply.code(400).send({ok:false,error:'Invalid property data'});const property=await updateOwnerProperty(user.id,r.params.id,r.body.property);return property?{ok:true,property}:reply.code(404).send({ok:false,error:'Property not found'})}catch(e){r.log.error(e);return reply.code(401).send({ok:false,error:'Authorization failed'})}});
 
-type AuthBody = { initData?: string };
-type PropertyBody = AuthBody & { property?: PropertyInput };
-
-async function authenticatedUser(initData: string | undefined): Promise<{ telegram: TelegramUser; user: Awaited<ReturnType<typeof upsertTelegramUser>> }> {
-  const telegram = validateTelegramInitData(initData ?? '', botToken);
-  const user = await upsertTelegramUser(telegram);
-  return { telegram, user };
-}
-
-function validProperty(input: PropertyInput | undefined): input is PropertyInput {
-  if (!input) return false;
-  return typeof input.title === 'string' && input.title.trim().length > 0 && input.title.trim().length <= 120
-    && typeof input.city === 'string' && input.city.trim().length > 0 && input.city.trim().length <= 120
-    && typeof input.address === 'string' && input.address.trim().length > 0 && input.address.trim().length <= 300
-    && typeof input.price_per_night === 'number' && Number.isFinite(input.price_per_night) && input.price_per_night > 0
-    && Number.isInteger(input.max_guests) && input.max_guests >= 1 && input.max_guests <= 50
-    && (input.amenities === undefined || (Array.isArray(input.amenities) && input.amenities.every(v => typeof v === 'string')));
-}
-
-app.get('/health', async (_request, reply) => {
-  try {
-    const database = await databaseHealth();
-    return { status: 'ok', service: 'rent-app', version: '0.3.0', database: database ? 'ok' : 'not_configured' };
-  } catch (error) {
-    app.log.error(error);
-    return reply.code(503).send({ status: 'degraded', service: 'rent-app', version: '0.3.0', database: 'error' });
-  }
-});
-
-app.post<{ Body: AuthBody }>('/api/auth/telegram', async (request, reply) => {
-  try {
-    const { user } = await authenticatedUser(request.body?.initData);
-    return { ok: true, user };
-  } catch (error) {
-    request.log.warn(error);
-    return reply.code(401).send({ ok: false, error: 'Telegram authorization failed' });
-  }
-});
-
-app.post<{ Body: AuthBody }>('/api/owner/properties/list', async (request, reply) => {
-  try {
-    const { user } = await authenticatedUser(request.body?.initData);
-    return { ok: true, properties: await listOwnerProperties(user.id) };
-  } catch (error) {
-    request.log.warn(error);
-    return reply.code(401).send({ ok: false, error: 'Authorization failed' });
-  }
-});
-
-app.post<{ Body: PropertyBody }>('/api/owner/properties', async (request, reply) => {
-  try {
-    const { user } = await authenticatedUser(request.body?.initData);
-    if (!validProperty(request.body?.property)) return reply.code(400).send({ ok: false, error: 'Invalid property data' });
-    const property = await createProperty(user.id, request.body.property);
-    return reply.code(201).send({ ok: true, property });
-  } catch (error) {
-    request.log.error(error);
-    return reply.code(401).send({ ok: false, error: 'Authorization failed' });
-  }
-});
-
-app.post<{ Params: { id: string }; Body: AuthBody }>('/api/owner/properties/:id/get', async (request, reply) => {
-  try {
-    const { user } = await authenticatedUser(request.body?.initData);
-    const property = await getOwnerProperty(user.id, request.params.id);
-    if (!property) return reply.code(404).send({ ok: false, error: 'Property not found' });
-    return { ok: true, property };
-  } catch (error) {
-    request.log.warn(error);
-    return reply.code(401).send({ ok: false, error: 'Authorization failed' });
-  }
-});
-
-app.post<{ Params: { id: string }; Body: PropertyBody }>('/api/owner/properties/:id', async (request, reply) => {
-  try {
-    const { user } = await authenticatedUser(request.body?.initData);
-    if (!validProperty(request.body?.property)) return reply.code(400).send({ ok: false, error: 'Invalid property data' });
-    const property = await updateOwnerProperty(user.id, request.params.id, request.body.property);
-    if (!property) return reply.code(404).send({ ok: false, error: 'Property not found' });
-    return { ok: true, property };
-  } catch (error) {
-    request.log.error(error);
-    return reply.code(401).send({ ok: false, error: 'Authorization failed' });
-  }
-});
-
-app.get('/', async (_request, reply) => {
-  reply.type('text/html; charset=utf-8');
-  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/><title>Rent Belarus</title><script src="https://telegram.org/js/telegram-web-app.js"></script><style>*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--tg-theme-bg-color,#f4f6f8);color:var(--tg-theme-text-color,#15171a)}main{min-height:100vh;padding:calc(28px + env(safe-area-inset-top)) 20px calc(28px + env(safe-area-inset-bottom));display:flex;align-items:center;justify-content:center}.wrap{width:min(520px,100%)}.eyebrow{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;opacity:.55;margin-bottom:12px}h1{font-size:36px;line-height:1.05;margin:0 0 12px}.lead{font-size:17px;line-height:1.5;opacity:.68;margin:0 0 28px}.hello{display:none;margin:0 0 18px;font-weight:650}.choices{display:grid;gap:12px}button{border:0;border-radius:22px;padding:22px;text-align:left;font:inherit;cursor:pointer;background:var(--tg-theme-secondary-bg-color,#fff);color:inherit;box-shadow:0 8px 30px rgba(0,0,0,.06)}button strong{display:block;font-size:21px;margin-bottom:5px}button span{font-size:14px;opacity:.62}.primary{background:var(--tg-theme-button-color,#2481cc);color:var(--tg-theme-button-text-color,#fff)}#state{margin-top:18px;font-size:13px;opacity:.55}</style></head><body><main><div class="wrap"><div class="eyebrow">Rent Belarus</div><h1>Жильё в Telegram</h1><p class="lead">Найдите жильё для поездки или разместите свой объект для бронирования.</p><p id="hello" class="hello"></p><div class="choices"><button class="primary" data-mode="rent"><strong>Снять жильё</strong><span>Найти свободные варианты и забронировать</span></button><button data-mode="host"><strong>Сдать жильё</strong><span>Добавить объект и управлять календарём</span></button></div><div id="state">Проверяем запуск через Telegram…</div></div></main><script>const tg=window.Telegram?.WebApp,state=document.getElementById('state'),hello=document.getElementById('hello');if(tg){tg.ready();tg.expand()}async function authenticate(){if(!tg?.initData){state.textContent='Откройте приложение через Telegram-бота для авторизации.';return}try{const response=await fetch('/api/auth/telegram',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({initData:tg.initData})}),data=await response.json();if(!response.ok)throw new Error();hello.textContent='Здравствуйте, '+data.user.first_name+'!';hello.style.display='block';state.textContent='Аккаунт подключён ✓'}catch{state.textContent='Не удалось выполнить авторизацию.'}}document.querySelectorAll('[data-mode]').forEach(btn=>btn.addEventListener('click',()=>{tg?.HapticFeedback?.impactOccurred('light');state.textContent=btn.dataset.mode==='rent'?'Раздел поиска жилья — следующая итерация.':'API кабинета собственника готов. Следующий шаг — форма объекта.'}));authenticate();</script></body></html>`;
-});
-
-const port = Number(process.env.PORT ?? 3000);
-try { await app.listen({ port, host: '0.0.0.0' }); }
-catch (error) { app.log.error(error); process.exit(1); }
+app.get('/',async(_r,reply)=>{reply.type('text/html; charset=utf-8');return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Rent Belarus</title><script src="https://telegram.org/js/telegram-web-app.js"></script><style>
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--tg-theme-bg-color,#f4f6f8);color:var(--tg-theme-text-color,#15171a)}main{min-height:100vh;padding:calc(22px + env(safe-area-inset-top)) 18px calc(30px + env(safe-area-inset-bottom))}.wrap{width:min(560px,100%);margin:auto}.eyebrow{font-size:12px;font-weight:750;letter-spacing:.09em;text-transform:uppercase;opacity:.5;margin-bottom:10px}h1{font-size:34px;line-height:1.08;margin:0 0 10px}h2{font-size:27px;margin:0 0 8px}.lead{font-size:16px;line-height:1.45;opacity:.65;margin:0 0 24px}.hello{font-weight:650;margin:0 0 18px}.choices,.cards{display:grid;gap:12px}.choice,.card{border:0;border-radius:22px;padding:20px;text-align:left;font:inherit;background:var(--tg-theme-secondary-bg-color,#fff);color:inherit;box-shadow:0 7px 24px rgba(0,0,0,.06)}.choice strong{display:block;font-size:20px;margin-bottom:5px}.choice span,.muted{font-size:14px;opacity:.6}.primary{background:var(--tg-theme-button-color,#2481cc);color:var(--tg-theme-button-text-color,#fff)}.screen{display:none}.screen.active{display:block}.top{display:flex;align-items:center;gap:10px;margin-bottom:20px}.back{border:0;background:var(--tg-theme-secondary-bg-color,#fff);color:inherit;border-radius:14px;padding:11px 14px;font:inherit}.add{width:100%;border:0;border-radius:18px;padding:17px;font:inherit;font-weight:700;background:var(--tg-theme-button-color,#2481cc);color:var(--tg-theme-button-text-color,#fff);margin:4px 0 16px}.field{margin:0 0 15px}.field label{display:block;font-size:13px;font-weight:650;margin:0 0 7px;opacity:.72}.field input,.field textarea{width:100%;border:0;outline:0;border-radius:16px;padding:15px;font:inherit;background:var(--tg-theme-secondary-bg-color,#fff);color:inherit}.field textarea{min-height:100px;resize:vertical}.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}.amenities{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:18px}.chip{border:0;border-radius:999px;padding:10px 13px;font:inherit;background:var(--tg-theme-secondary-bg-color,#fff);color:inherit}.chip.on{background:var(--tg-theme-button-color,#2481cc);color:var(--tg-theme-button-text-color,#fff)}.save{width:100%;border:0;border-radius:18px;padding:17px;font:inherit;font-weight:750;background:var(--tg-theme-button-color,#2481cc);color:var(--tg-theme-button-text-color,#fff)}#state{margin-top:15px;font-size:13px;opacity:.62}.card b{display:block;font-size:17px;margin-bottom:4px}.badge{font-size:11px;padding:5px 8px;border-radius:999px;background:rgba(128,128,128,.15);float:right}.empty{text-align:center;padding:28px 12px;opacity:.55}
+</style></head><body><main><div class="wrap">
+<section id="home" class="screen active"><div class="eyebrow">Rent Belarus</div><h1>Жильё в Telegram</h1><p class="lead">Найдите жильё для поездки или разместите свой объект для бронирования.</p><p id="hello" class="hello"></p><div class="choices"><button class="choice primary" id="rent"><strong>Снять жильё</strong><span>Найти свободные варианты и забронировать</span></button><button class="choice" id="host"><strong>Сдать жильё</strong><span>Добавить объект и управлять календарём</span></button></div><div id="state">Проверяем запуск через Telegram…</div></section>
+<section id="owner" class="screen"><div class="top"><button class="back" data-go="home">‹ Назад</button></div><h2>Мои объекты</h2><p class="lead">Черновики и опубликованное жильё.</p><button class="add" id="newProperty">Добавить объект</button><div id="propertyList" class="cards"></div></section>
+<section id="editor" class="screen"><div class="top"><button class="back" data-go="owner">‹ Назад</button></div><h2>Новый объект</h2><p class="lead">Заполните основные данные. Фотографии добавим следующим шагом.</p><form id="propertyForm"><div class="field"><label>Название</label><input id="title" maxlength="120" placeholder="Например, Уютная студия" required></div><div class="field"><label>Город</label><input id="city" maxlength="120" placeholder="Минск" required></div><div class="field"><label>Адрес</label><input id="address" maxlength="300" placeholder="Улица, дом, квартира" required></div><div class="row"><div class="field"><label>Цена за сутки, BYN</label><input id="price" type="number" min="0.01" step="0.01" inputmode="decimal" required></div><div class="field"><label>Гостей</label><input id="guests" type="number" min="1" max="50" value="2" required></div></div><div class="field"><label>Описание</label><textarea id="description" placeholder="Расскажите о жилье"></textarea></div><div class="field"><label>Удобства</label><div class="amenities" id="amenities"><button type="button" class="chip">Wi‑Fi</button><button type="button" class="chip">Кухня</button><button type="button" class="chip">Парковка</button><button type="button" class="chip">Стиральная машина</button><button type="button" class="chip">Кондиционер</button><button type="button" class="chip">Телевизор</button></div></div><div class="row"><div class="field"><label>Заезд</label><input id="checkin" type="time"></div><div class="field"><label>Выезд</label><input id="checkout" type="time"></div></div><div class="field"><label>Правила проживания</label><textarea id="rules" placeholder="Например: не курить, без вечеринок"></textarea></div><button class="save" type="submit">Сохранить черновик</button><div id="formState"></div></form></section>
+</div></main><script>
+const tg=window.Telegram?.WebApp,state=document.getElementById('state'),hello=document.getElementById('hello');if(tg){tg.ready();tg.expand()}function show(id){document.querySelectorAll('.screen').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');window.scrollTo(0,0)}async function api(path,body){const r=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({initData:tg?.initData||'',...body})});const d=await r.json();if(!r.ok)throw new Error(d.error||'Ошибка');return d}async function auth(){if(!tg?.initData){state.textContent='Откройте приложение через Telegram-бота для авторизации.';return}try{const d=await api('/api/auth/telegram',{});hello.textContent='Здравствуйте, '+d.user.first_name+'!';state.textContent='Аккаунт подключён ✓'}catch{state.textContent='Не удалось выполнить авторизацию.'}}async function loadProperties(){const box=document.getElementById('propertyList');box.innerHTML='<div class="empty">Загрузка…</div>';try{const d=await api('/api/owner/properties/list',{});box.innerHTML=d.properties.length?d.properties.map(p=>'<div class="card"><span class="badge">'+(p.status==='draft'?'Черновик':p.status)+'</span><b>'+esc(p.title)+'</b><div class="muted">'+esc(p.city)+' · '+Number(p.price_per_night).toFixed(2)+' BYN / сутки</div></div>').join(''):'<div class="empty">У вас пока нет объектов.</div>'}catch{box.innerHTML='<div class="empty">Не удалось загрузить объекты.</div>'}}function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}document.getElementById('host').onclick=()=>{tg?.HapticFeedback?.impactOccurred('light');show('owner');loadProperties()};document.getElementById('rent').onclick=()=>state.textContent='Поиск жилья — следующая итерация.';document.getElementById('newProperty').onclick=()=>show('editor');document.querySelectorAll('[data-go]').forEach(b=>b.onclick=()=>show(b.dataset.go));document.querySelectorAll('.chip').forEach(b=>b.onclick=()=>b.classList.toggle('on'));document.getElementById('propertyForm').onsubmit=async e=>{e.preventDefault();const fs=document.getElementById('formState');fs.textContent='Сохраняем…';const property={title:document.getElementById('title').value.trim(),city:document.getElementById('city').value.trim(),address:document.getElementById('address').value.trim(),price_per_night:Number(document.getElementById('price').value),max_guests:Number(document.getElementById('guests').value),description:document.getElementById('description').value.trim(),amenities:[...document.querySelectorAll('.chip.on')].map(x=>x.textContent),check_in_time:document.getElementById('checkin').value||null,check_out_time:document.getElementById('checkout').value||null,house_rules:document.getElementById('rules').value.trim()};try{await api('/api/owner/properties',{property});tg?.HapticFeedback?.notificationOccurred('success');e.target.reset();document.querySelectorAll('.chip').forEach(x=>x.classList.remove('on'));show('owner');loadProperties()}catch(err){tg?.HapticFeedback?.notificationOccurred('error');fs.textContent='Не удалось сохранить: '+err.message}};auth();
+</script></body></html>`});
+const port=Number(process.env.PORT??3000);try{await app.listen({port,host:'0.0.0.0'})}catch(error){app.log.error(error);process.exit(1)}

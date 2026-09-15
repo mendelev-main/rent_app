@@ -1,51 +1,71 @@
 import Fastify from 'fastify';
+import { validateTelegramInitData } from './telegram-auth.js';
 
 const app = Fastify({ logger: true });
+const botToken = process.env.TELEGRAM_BOT_TOKEN ?? '';
 
-app.get('/health', async () => {
-  return {
-    status: 'ok',
-    service: 'rent-app',
-    version: '0.1.0'
-  };
+app.get('/health', async () => ({ status: 'ok', service: 'rent-app', version: '0.2.0' }));
+
+app.post<{ Body: { initData?: string } }>('/api/auth/telegram', async (request, reply) => {
+  try {
+    const user = validateTelegramInitData(request.body?.initData ?? '', botToken);
+    return { ok: true, user };
+  } catch (error) {
+    request.log.warn(error);
+    return reply.code(401).send({ ok: false, error: 'Telegram authorization failed' });
+  }
 });
 
 app.get('/', async (_request, reply) => {
   reply.type('text/html; charset=utf-8');
   return `<!doctype html>
 <html lang="ru">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Rent App</title>
-    <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f6f7f9; color: #17191c; }
-      main { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
-      section { width: min(560px, 100%); background: white; border-radius: 24px; padding: 32px; box-shadow: 0 18px 50px rgba(0,0,0,.08); }
-      h1 { margin-top: 0; font-size: 32px; }
-      p { line-height: 1.55; color: #555b66; }
-      .status { margin-top: 20px; display: inline-block; padding: 10px 14px; border-radius: 999px; background: #ecf8ef; color: #22733a; font-weight: 600; }
-    </style>
-  </head>
-  <body>
-    <main>
-      <section>
-        <h1>Rent App</h1>
-        <p>Telegram Mini App для аренды и бронирования жилья.</p>
-        <p>Iteration 0: приложение развернуто, backend запущен, следующий этап — Telegram Mini App и авторизация.</p>
-        <span class="status">Backend is running</span>
-      </section>
-    </main>
-  </body>
-</html>`;
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Rent Belarus</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    *{box-sizing:border-box} body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--tg-theme-bg-color,#f4f6f8);color:var(--tg-theme-text-color,#15171a)}
+    main{min-height:100vh;padding:calc(28px + env(safe-area-inset-top)) 20px calc(28px + env(safe-area-inset-bottom));display:flex;align-items:center;justify-content:center}
+    .wrap{width:min(520px,100%)} .eyebrow{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;opacity:.55;margin-bottom:12px}
+    h1{font-size:36px;line-height:1.05;margin:0 0 12px} .lead{font-size:17px;line-height:1.5;opacity:.68;margin:0 0 28px}
+    .hello{display:none;margin:0 0 18px;font-weight:650}.choices{display:grid;gap:12px}
+    button{border:0;border-radius:22px;padding:22px;text-align:left;font:inherit;cursor:pointer;background:var(--tg-theme-secondary-bg-color,#fff);color:inherit;box-shadow:0 8px 30px rgba(0,0,0,.06)}
+    button strong{display:block;font-size:21px;margin-bottom:5px}button span{font-size:14px;opacity:.62}.primary{background:var(--tg-theme-button-color,#2481cc);color:var(--tg-theme-button-text-color,#fff)}
+    #state{margin-top:18px;font-size:13px;opacity:.55}
+  </style>
+</head>
+<body><main><div class="wrap">
+  <div class="eyebrow">Rent Belarus</div>
+  <h1>Жильё в Telegram</h1>
+  <p class="lead">Найдите жильё для поездки или разместите свой объект для бронирования.</p>
+  <p id="hello" class="hello"></p>
+  <div class="choices">
+    <button class="primary" data-mode="rent"><strong>Снять жильё</strong><span>Найти свободные варианты и забронировать</span></button>
+    <button data-mode="host"><strong>Сдать жильё</strong><span>Добавить объект и управлять календарём</span></button>
+  </div>
+  <div id="state">Проверяем запуск через Telegram…</div>
+</div></main>
+<script>
+  const tg = window.Telegram?.WebApp;
+  const state = document.getElementById('state');
+  const hello = document.getElementById('hello');
+  if (tg) { tg.ready(); tg.expand(); }
+  async function authenticate(){
+    if (!tg?.initData) { state.textContent='Откройте приложение через Telegram-бота для авторизации.'; return; }
+    try {
+      const response=await fetch('/api/auth/telegram',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({initData:tg.initData})});
+      const data=await response.json();
+      if(!response.ok) throw new Error();
+      hello.textContent='Здравствуйте, '+data.user.first_name+'!'; hello.style.display='block'; state.textContent='Telegram авторизация подтверждена ✓';
+    } catch { state.textContent='Не удалось подтвердить Telegram-авторизацию.'; }
+  }
+  document.querySelectorAll('[data-mode]').forEach(btn=>btn.addEventListener('click',()=>{tg?.HapticFeedback?.impactOccurred('light');state.textContent=btn.dataset.mode==='rent'?'Раздел поиска жилья — следующая итерация.':'Кабинет собственника — следующая итерация.';}));
+  authenticate();
+</script></body></html>`;
 });
 
 const port = Number(process.env.PORT ?? 3000);
-const host = '0.0.0.0';
-
-try {
-  await app.listen({ port, host });
-} catch (error) {
-  app.log.error(error);
-  process.exit(1);
-}
+try { await app.listen({ port, host: '0.0.0.0' }); }
+catch (error) { app.log.error(error); process.exit(1); }

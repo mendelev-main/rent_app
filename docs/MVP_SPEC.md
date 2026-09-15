@@ -14,27 +14,21 @@ Telegram Mini App передаёт `Telegram.WebApp.initData` Railway backend. B
 ### 4.1 Модель объекта — реализовано
 `properties` связан с `users` через `owner_id`. Статусы: `draft`, `published`, `archived`. Поля: название, город, адрес, описание, цена/сутки, BYN, гости, удобства, правила, заезд/выезд. Цена > 0, гости 1–50.
 
-### 4.2 Фотографии — upload flow реализован
-`property_photos` хранит метаданные, Supabase Storage bucket `property-photos` — файлы. JPEG/PNG/WebP, до 10 MB. Есть сортировка и признак обложки.
-
-Фотография выбирается в Mini App и отправляется в Railway backend вместе с Telegram `initData`. Backend сначала проверяет Telegram-пользователя и принадлежность объекта, затем загружает файл в Storage по уникальному пути `<property-id>/<uuid>.<ext>` и только после успешной загрузки создаёт запись `property_photos`. Клиент не получает `SUPABASE_SECRET_KEY`.
-
-Для server-side Storage Railway должен иметь `SUPABASE_URL` и `SUPABASE_SECRET_KEY`. Secret key хранится только в Railway Variables и никогда не коммитится. Публичный bucket используется только для чтения фотографий опубликованных/отображаемых объектов; запись выполняет доверенный backend.
+### 4.2 Фотографии — production upload подтверждён
+`property_photos` хранит метаданные, Supabase Storage bucket `property-photos` — файлы. JPEG/PNG/WebP, до 10 MB. Есть сортировка и признак обложки. Mini App отправляет файл в Railway с Telegram `initData`; backend проверяет пользователя и владельца объекта, загружает по уникальному пути и создаёт метаданные. `SUPABASE_SECRET_KEY` существует только в Railway. Production-загрузка пользователем успешно проверена.
 
 ### 4.3 Безопасность
-`users`, `properties`, `property_photos` имеют RLS без публичных policies. Mini App работает через Railway. Каждый owner endpoint валидирует Telegram `initData`, получает серверный `users.id`; клиентский `owner_id` не принимается. Photo upload также owner-scoped: загрузить фото в чужой объект нельзя.
+`users`, `properties`, `property_photos` имеют RLS без публичных policies. Mini App работает через Railway. Каждый owner endpoint валидирует Telegram `initData`, получает серверный `users.id`; клиентский `owner_id` не принимается. Photo upload owner-scoped.
 
 ### 4.4 Owner Property API — реализовано
 - `POST /api/owner/properties/list` — свои объекты.
 - `POST /api/owner/properties` — новый `draft`.
 - `POST /api/owner/properties/:id/get` — свой объект + фотографии.
-- `POST /api/owner/properties/:id` — редактирование своего объекта.
-- `POST /api/owner/properties/:id/photos` — загрузка фотографии своего объекта.
+- `POST /api/owner/properties/:id` — редактирование.
+- `POST /api/owner/properties/:id/photos` — загрузка фото.
 
-### 4.5 UI «Сдать жильё» — создание, редактирование и фото реализованы
-После **«Сдать жильё»** пользователь попадает в **«Мои объекты»**. Можно создать черновик или открыть существующий объект. Форма содержит основные данные и удобства. После первого сохранения появляется блок **«Фотографии»**. Пользователь выбирает JPEG/PNG/WebP и нажимает **«Добавить фотографию»**; после успешной загрузки изображение появляется в галерее объекта.
-
-Следующая итерация: управление фотографиями (удаление/обложка/порядок) и публикация.
+### 4.5 UI «Сдать жильё»
+Реализованы список своих объектов, создание/редактирование черновика и загрузка фотографий. Следующая итерация: управление фото и публикация.
 
 ## 5. Сценарий гостя
 Опубликованные объекты; город, даты, гости; только доступные варианты; карточка; заявка; статусы; разрешённое общение через Telegram.
@@ -57,21 +51,26 @@ Telegram Mini App передаёт `Telegram.WebApp.initData` Railway backend. B
 ## 11. Инфраструктура
 GitHub `mendelev-main/rent_app`, production `main`; Railway — Fastify + Mini App и auto-deploy; Supabase — PostgreSQL + Storage; Railway подключён через Session pooler `DATABASE_URL`; Telegram — идентификация/уведомления; секреты только server-side.
 
-## 12. Не входит в первый MVP
+## 12. UI / UX — обязательное требование
+Дизайн должен быть понятным, последовательным и выполненным в одном стиле на всех экранах. Каждая новая UI-функция проходит обязательный Design Review до отметки как завершённая. Полные критерии находятся в `docs/UI_DESIGN_REQUIREMENTS.md` и являются частью требований MVP, а не рекомендацией.
+
+Ключевые требования: единая визуальная система; mobile-first для Telegram; ясное главное действие; понятные loading/empty/error/success состояния; сохранение введённых данных при ошибках; безопасные destructive actions; Telegram light/dark theme compatibility; критичные бизнес-проверки дублируются backend.
+
+## 13. Не входит в первый MVP
 Онлайн-оплата, выплаты/комиссия, свой realtime-чат, отзывы/рейтинги, сложная модерация, динамические цены, промокоды, полноценная карта, юридическая автоматизация, профессиональный PMS/channel manager.
 
-## 13. Definition of MVP
+## 14. Definition of MVP
 `Telegram → auth → собственник создаёт/публикует объект → гость находит → даты → заявка → уведомление → подтверждение → блокировка дат → уведомление гостю`.
 
-## 14. Текущий прогресс
+## 15. Текущий прогресс
 - [x] GitHub + Railway production.
 - [x] Telegram Mini App + server-side auth.
 - [x] Supabase PostgreSQL + users.
 - [x] `properties` + `property_photos` + Storage bucket.
 - [x] Owner Property API.
 - [x] UI «Мои объекты», создание и редактирование.
-- [x] Backend/UI flow загрузки фотографий.
-- [ ] Настроить `SUPABASE_SECRET_KEY` в Railway и подтвердить production upload.
+- [x] Production-загрузка фотографий.
+- [x] UI Design Review требования закреплены.
 - [ ] Управление фотографиями: удаление, обложка, порядок.
 - [ ] Публикация объекта.
 - [ ] Поиск и карточка объекта для гостя.
